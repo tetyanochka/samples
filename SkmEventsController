@@ -1,0 +1,99 @@
+var _$state, _$q, _eventsService, _app, _confirm;
+class SkmEventsController {
+  constructor($state, $q, eventsService, appService, confirm) {
+    'ngInject';
+
+    _$state = $state;
+    _$q = $q;
+    _eventsService = eventsService;
+    _app = appService;
+    _confirm = confirm;
+
+    this.fetchEvents = _eventsService.getEvents;
+    this.masterSchedule = _app.getMasterWorkingHoursData();
+    this.eventSources = [];
+  }
+
+  onEventRemove(event) {
+    // Do not remove $q.defer It doesn't work properly without this hack with deferred :(
+    let deferred = _$q.defer(),
+      recurrenceRule = event.recurrenceRule;
+
+    if (recurrenceRule) {
+      // Selected dayOff is in the middle of the sequence of dayOffs or is the first one
+      // Depending on user's answer
+      // 1) Cancel only current dayOff => Need to update recurrenceRule of the root event and create new sequence of events
+      // 2) Cancel current dayOff and all next dayOffs from the sequence => Need only to update the recurrenceRule of the root event
+      if (recurrenceRule.freq === 'DAILY' &&
+        recurrenceRule.interval === 1 && !(event.start.isSame(recurrenceRule.until, 'day'))) {
+        //_confirm.show("Отменить выходной?", "Только этот", "Этот и все последующие")
+        _confirm.show("Отменить выходной?", "Да", "Нет")
+          .then(()=> {
+            // case #1)
+            //console.log('только этот');
+            let newRecurrentEvent = angular.copy(event);
+            newRecurrentEvent.start = moment(angular.copy(event.start).add(1, 'day').toDate());
+            newRecurrentEvent.end = moment(angular.copy(newRecurrentEvent.start).endOf('day').toDate());
+            delete newRecurrentEvent.resourceId;
+
+            _$q.all([
+              _eventsService.updateRecurrenceRuleUntilStartDate(event),
+              _eventsService.submitEvent(newRecurrentEvent)
+            ]).then(deferred.resolve, deferred.reject);
+
+
+          }, ()=> {
+            deferred.reject();
+            // todo backlog
+            // case #2)
+            //console.log("этот и последующие");
+            //_eventsService.updateRecurrenceRuleUntilStartDate(event).then(deferred.resolve, deferred.reject);
+          });
+      } else {
+        // selected dayOff is the last date of the sequence of dayOffs
+        // just update recurrentRule of the event with 'until' date less on one day
+        _confirm.show("Отменить выходной?", "Да", "Нет")
+          .then(()=> {
+            _eventsService.updateRecurrenceRuleUntilStartDate(event).then(deferred.resolve, deferred.reject);
+          }, deferred.reject);
+      }
+    } else {
+      // dayOffs without recurrenceRule
+      _confirm.show("Отменить выходной?", "Да", "Нет")
+        .then(()=> {
+          _eventsService.deleteEvent(event).then(deferred.resolve, deferred.reject);
+        }, deferred.reject);
+    }
+
+
+
+    return deferred.promise;
+  }
+
+  $onInit(){
+    this.onEventSelected = function (event) {
+      _$state.go('.edit', {
+        eventId: _app.getResourceId(event),
+        event: event
+      });
+    };
+
+    this.onEventSubmit = function (event) {
+      if (event.allDay && event.techJson && event.techJson.dayOff && (event.end.diff(event.start, 'days') > 0)) {
+        _eventsService.addRecurrenceRule(event);
+        event.end.date(event.start.date());
+      }
+      return _eventsService.submitEvent(event).then((resp) => {
+        event.status === 'DRAFT' && _$state.go('.new', {
+          event: resp,
+          justCreated: true
+        });
+        return resp;
+      }, (resp) => {
+        event.allDay && _$state.go('.blocking_events', {events: resp});
+      });
+    }
+  }
+}
+
+export default SkmEventsController;
