@@ -1,0 +1,116 @@
+var _$http, _SERVER, _app, _confirm;
+
+class EventsService {
+  constructor($http, SERVER, appService, confirm) {
+    "ngInlect";
+
+    _$http = $http;
+    _SERVER = SERVER;
+    _app = appService;
+    _confirm = confirm;
+  }
+
+  getNewEventData() {
+    function round(date, duration, method) {
+      return moment(Math[method]((+date) / (+duration)) * (+duration));
+    }
+
+    let m_start = round(moment(), moment.duration(15, "minutes"), "ceil");
+    return {
+      allDay: false,
+      start: m_start.format(),
+      end: angular.copy(m_start).add(30, 'minutes').format(),
+      status: 'DRAFT',
+      visible: true
+    }
+  }
+
+  getEvents({start: start, end: end}) {
+    let url = _SERVER.URL + 'api/events/agenda';
+
+    return _$http.get(url, {
+      params: {
+      // fullcalendar removes minutes and seconds from date objects.
+      // That's why we need to transform date in full format for our server api this way:
+        start: moment(start.toDate()).format(),
+        end: moment(end.toDate()).format(),
+        masterId: _app.getMasterId()
+      }
+    }).then((resp) => {
+      let embedded = resp.data._embedded,
+        events = embedded ? embedded.events : [];
+      return events;
+    });
+  }
+
+  getEventById(eventId) {
+    let url = _SERVER.URL + 'api/events/' + eventId;
+    return _$http.get(url).then((resp) => resp.data);
+  }
+
+  activateEvent(event) {
+    // TODO temp update event. Change to special API for activating
+    event.status = 'ACTIVE';
+    return _app.updatePartially(event._links.self.href, event, ['status']).then((resp) => resp.data);
+  }
+
+  addRecurrenceRule(event) {
+    event.recurrenceRule = {
+      freq: 'DAILY',
+      until: angular.copy(event).end,
+      interval: 1
+    }
+  }
+
+  submitEvent(event) {
+    let url = _SERVER.URL + 'api/events',
+      masterId = _app.getMasterId();
+
+    event.start = event.start.format();
+    event.end = event.end.format();
+    if (event.recurrenceRule && moment.isMoment(event.recurrenceRule.until)) {
+      event.recurrenceRule.until = event.recurrenceRule.until.format();
+    }
+    event.master = _SERVER.URL + 'api/masters/' + masterId;
+
+    if (event.serviceJson && event.serviceJson.resourceId) {
+      event.service = _SERVER.URL + 'api/services/' + event.serviceJson.resourceId;
+    }
+
+    return _$http.post(url, event).then((resp) => resp.data);
+  }
+
+  updateEvent(event) {
+    if (event.serviceJson && event.serviceJson.resourceId) {
+      event.service = _SERVER.URL + 'api/services/' + event.serviceJson.resourceId;
+    }
+    return _$http.patch(event._links.self.href, event)
+  }
+
+  cancelEvent(event) {
+    return _$http.patch(event._links.self.href, {
+      status: "CANCELED",
+      visible: false
+    })
+  }
+
+  removeDraft() {
+    // confirm window
+    return _confirm.show('Запись сохранена не будет. Вы уверены, что хотите уйти?').then((resp) => {
+      return this.deleteEvent(this.currentEvent);
+    });
+
+  }
+
+  deleteEvent(event) {
+    return _$http.delete(event._links.self.href)
+  }
+
+  updateRecurrenceRuleUntilStartDate(event){
+    event.recurrenceRule.until = moment(angular.copy(event.start).subtract(1, 'day').toDate()).endOf('day').format();
+    return _app.updatePartially(event._links.self.href, event, ['recurrenceRule']);
+  }
+
+}
+
+export default EventsService;
